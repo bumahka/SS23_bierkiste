@@ -6,7 +6,7 @@ UartMessage::UartMessage(uint8_t rx_pin, uint8_t tx_pin, uint64_t sBaudrate, uin
     Serial2.begin(baudrate, serialMode, uart_rx_pin, uart_tx_pin);
 
     direction = 0;
-    speed = 270;
+    speed = 0;
     distance_1 = 100;
     distance_2 = 120;
     distance_3 = 140;
