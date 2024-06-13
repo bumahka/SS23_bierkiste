@@ -1,11 +1,11 @@
 /*
- * Project: Autonome Bierkiste SS23
+ * Project: Autonome Bierkiste WS23
  * At the MMT faculty, students collaboratively developed a beer crate with an electric drive.
  * Following that, the code for the autonomous driving function of the beer crate was implemented.
  * In this process, C++ proved to be the ideal programming language for this task.
  *
  * Created by: Gabriel Boehm, Isabel Kraus, Walter Orlov, Dennis Schell
- *
+ * Contributed to by: Ferdinand Brezinski, Simon Wasihun
  */
 
 /* All necessary classes */
@@ -20,6 +20,10 @@
 #include "sensors.cpp"
 #include "bremse.h"
 #include "bremse.cpp"
+#include <esp32_pcnt.h>
+#include "spdsensor.h"
+#include "spdsensor.cpp"
+#include <QuickPID.h>
 #include <esp_task_wdt.h> /* Load Watchdog-Library */
 
 /* defines */
@@ -37,8 +41,13 @@ volatile bool flagISR = false;
 
 int16_t steering_val = 0;
 byte direction = 0;
-uint16_t speed = 270;
+uint16_t speed = 0;
+uint16_t tspeed = 0;
 uint16_t distances[3];
+int startdetector = 0;
+float PID_Kp=0.001, PID_Ki=10, PID_Kd=5;                  //PID Controller parameters
+float PID_Setpoint, PID_Input, PID_Output;                //Target value, current speed, output from PID controller
+QuickPID myPID(&PID_Input, &PID_Output, &PID_Setpoint);   //Set up PID controller and link variables
 
 /* global objets */
 AccelStepper stepper(AccelStepper::FULL4WIRE,
@@ -57,6 +66,7 @@ sensor mySensors(sensorLeft_trigger,
                  sensorRight_echo,
                  sensorMiddle_echo,
                  myBreak);
+Spdsensor mySpdsensor(sensorSpeed, myPID);
 
 /* Function prototypes */
 void setup();
@@ -98,6 +108,15 @@ void setup()
   /* Semaphore setup */
   mySemaphore = xSemaphoreCreateMutex();
   Semaphore_Steering = xSemaphoreCreateMutex();
+
+  /* Start hardware counter for speed sensor */
+  mySpdsensor.startCounter();
+  
+  myPID.SetTunings(PID_Kp, PID_Ki, PID_Kd);                   //Set controller parameters
+  myPID.SetOutputLimits(0, 160);                              //Set limits for controller output, directly use 8bit values for motor
+  myPID.SetSampleTimeUs(10000);                               //Set timeframe for calculation
+  myPID.SetAntiWindupMode(QuickPID::iAwMode::iAwCondition);   //Set Anti Windup to reduce overshoot
+  myPID.SetMode(QuickPID::Control::automatic);                //Start controller
 }
 
 /* Loop function
@@ -161,9 +180,44 @@ void loop()
       }
       xSemaphoreGive(Semaphore_Steering);
 
-      /* set the speed */
+      /* get the speed from the surface */
       myUart.getSpeed(speed);
+      /* Save speed for loops without message from surface */
+      tspeed = speed;
+      /* get speed from the PID controller based on values from the speed sensor */
+      mySpdsensor.getSpeed(PID_Setpoint, PID_Input, PID_Output, speed);
+      /* set speed for the motor */
       myAntrieb.setSpeed(speed);
+
+      /* count up start detector */
+      if (startdetector < 2) {
+        startdetector++;
+      }
+    }
+  }
+  else {
+    /* Surface sends messages around every second, exact timeframe is unknown.
+    Speed sensor needs set timeframes for measurement.
+    That means PID controller needs to run outside of surface messages as well for proper speed measurement 
+    Also allows for quicker speed adjustment, as the controller doesn't have to wait a second to correct overshoots */
+    if (mySensors.distanceOK())
+    {
+      if (myBreak.get_State_Break())
+      {
+        myBreak.Deactivate_EmergencyBreak();
+      }
+
+      /* startdetector counts the number of messages the ESP receives.
+      Only start the independant speed control after receiving 2 messages.
+      The UART adapter triggers one message on start up.
+      The second message the ESP receives is the first message from the surface. 
+      After the first surface message start the independant speed control. */
+      if (startdetector > 1) {
+        /* get the target speed from the latest surface message */
+        speed = tspeed;
+        mySpdsensor.getSpeed(PID_Setpoint, PID_Input, PID_Output, speed);
+        myAntrieb.setSpeed(speed);
+      }
     }
   }
   // esp_task_wdt_reset(); // reset watchdog timer

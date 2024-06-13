@@ -14,6 +14,7 @@
 #define sensorRight_echo    18
 #define sensorMiddle_trigger     5
 #define sensorMiddle_echo        21
+#define sensorSpeed			35
 #define rx_pin              16
 #define tx_pin              17
 #define N_STEERING_DIRECTION 32
